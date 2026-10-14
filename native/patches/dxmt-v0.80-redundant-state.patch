@@ -1,0 +1,65 @@
+diff --git a/src/d3d11/d3d11_context_impl.cpp b/src/d3d11/d3d11_context_impl.cpp
+index d53be63..879227f 100644
+--- a/src/d3d11/d3d11_context_impl.cpp
++++ b/src/d3d11/d3d11_context_impl.cpp
+@@ -2914,8 +2914,17 @@ public:
+   OMSetBlendState(ID3D11BlendState *pBlendState, const FLOAT BlendFactor[4], UINT SampleMask) override {
+     std::lock_guard<mutex_t> lock(mutex);
+ 
++    auto expected = com_cast<IMTLD3D11BlendState>(pBlendState);
++    const FLOAT default_factor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
++    const FLOAT *factor = BlendFactor ? BlendFactor : default_factor;
++    if (state_.OutputMerger.BlendState == expected.ptr() &&
++        state_.OutputMerger.SampleMask == SampleMask &&
++        memcmp(state_.OutputMerger.BlendFactor, factor, sizeof(float[4])) == 0) {
++      return;
++    }
++
+     bool should_invalidate_pipeline = false;
+-    if (auto expected = com_cast<IMTLD3D11BlendState>(pBlendState)) {
++    if (expected) {
+       if (expected.ptr() != state_.OutputMerger.BlendState) {
+         state_.OutputMerger.BlendState = expected.ptr();
+         should_invalidate_pipeline = true;
+@@ -2968,7 +2977,11 @@ public:
+   OMSetDepthStencilState(ID3D11DepthStencilState *pDepthStencilState, UINT StencilRef) override {
+     std::lock_guard<mutex_t> lock(mutex);
+ 
+-    if (auto expected = com_cast<IMTLD3D11DepthStencilState>(pDepthStencilState)) {
++    auto expected = com_cast<IMTLD3D11DepthStencilState>(pDepthStencilState);
++    if (state_.OutputMerger.DepthStencilState == expected.ptr() && state_.OutputMerger.StencilRef == StencilRef) {
++      return;
++    }
++    if (expected) {
+       state_.OutputMerger.DepthStencilState = expected.ptr();
+     } else {
+       state_.OutputMerger.DepthStencilState = nullptr;
+@@ -3680,18 +3693,24 @@ public:
+         bool replaced = false;
+         auto &entry = VertexBuffers.bind(slot, {pVertexBuffer}, replaced, !pVertexBuffer->hazardsFree());
+         if (!replaced) {
++          bool changed = false;
+           if (pStrides && pStrides[slot - StartSlot] != entry.Stride) {
+             VertexBuffers.set_dirty(slot);
+             entry.Stride = pStrides[slot - StartSlot];
++            changed = true;
+           }
+           if (pOffsets && pOffsets[slot - StartSlot] != entry.Offset) {
+             VertexBuffers.set_dirty(slot);
+             entry.Offset = pOffsets[slot - StartSlot];
++            changed = true;
++          }
++          // Renames remain covered by the existing dirty binding upload.
++          if (changed) {
++            EmitST([=, offset = entry.Offset,
++                  stride = entry.Stride](ArgumentEncodingContext &enc) mutable {
++              enc.bindVertexBufferOffset(slot, offset, stride);
++            });
+           }
+-          EmitST([=, offset = entry.Offset,
+-                stride = entry.Stride](ArgumentEncodingContext &enc) mutable {
+-            enc.bindVertexBufferOffset(slot, offset, stride);
+-          });
+           continue;
+         }
+         if (pStrides) {

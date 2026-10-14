@@ -1,0 +1,89 @@
+diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
+index 29ff1fb..2227ff4 100644
+--- a/src/d3d11/d3d11_swapchain.cpp
++++ b/src/d3d11/d3d11_swapchain.cpp
+@@ -2,6 +2,8 @@
+ #include "d3d11_device.h"
+ #include "d3d11_swapchain.h"
+ 
++#include "../util/util_env.h"
++
+ namespace dxvk {
+ 
+   static uint16_t MapGammaControlPoint(float x) {
+@@ -23,6 +25,17 @@ namespace dxvk {
+     m_device    (pDevice->GetDXVKDevice()),
+     m_context   (m_device->createContext()),
+     m_frameLatencyCap(pDevice->GetOptions()->maxFrameLatency) {
++    std::string backgroundFrameRate = env::getEnvVar("DXVK_BACKGROUND_FRAME_RATE");
++    if (!backgroundFrameRate.empty()) {
++      try {
++        int rate = std::stoi(backgroundFrameRate);
++        if (rate > 0)
++          m_backgroundFramePeriodMs = (1000u + UINT(rate) - 1u) / UINT(rate);
++      } catch (const std::invalid_argument&) {
++      } catch (const std::out_of_range&) {
++      }
++    }
++
+     CreateFrameLatencyEvent();
+ 
+     if (!pDevice->GetOptions()->deferSurfaceCreation)
+@@ -197,6 +210,30 @@ namespace dxvk {
+           UINT                      SyncInterval,
+           UINT                      PresentFlags,
+     const DXGI_PRESENT_PARAMETERS*  pPresentParameters) {
++    if (!m_backgroundFramePeriodMs
++     || (PresentFlags & (DXGI_PRESENT_TEST | DXGI_PRESENT_DO_NOT_WAIT))
++     || (!::IsIconic(m_window) && ::IsWindowVisible(m_window)))
++      return PresentInternal(SyncInterval, PresentFlags, pPresentParameters);
++
++    ULONGLONG started = ::GetTickCount64();
++    HRESULT hr = PresentInternal(SyncInterval, PresentFlags, pPresentParameters);
++
++    // The original Present path has released its context locks here. Include
++    // its queue waits in the period, including when no drawable was available.
++    if (SUCCEEDED(hr)) {
++      ULONGLONG elapsed = ::GetTickCount64() - started;
++      if (elapsed < m_backgroundFramePeriodMs)
++        ::Sleep(DWORD(m_backgroundFramePeriodMs - elapsed));
++    }
++
++    return hr;
++  }
++
++
++  HRESULT D3D11SwapChain::PresentInternal(
++          UINT                      SyncInterval,
++          UINT                      PresentFlags,
++    const DXGI_PRESENT_PARAMETERS*  pPresentParameters) {
+     auto options = m_parent->GetOptions();
+ 
+     if (options->syncInterval >= 0)
+diff --git a/src/d3d11/d3d11_swapchain.h b/src/d3d11/d3d11_swapchain.h
+index f4debea..5eb55d7 100644
+--- a/src/d3d11/d3d11_swapchain.h
++++ b/src/d3d11/d3d11_swapchain.h
+@@ -112,8 +112,15 @@ namespace dxvk {
+     bool                    m_dirty = true;
+     bool                    m_vsync = true;
+ 
++    UINT                    m_backgroundFramePeriodMs = 0;
++
+     double                  m_displayRefreshRate = 0.0;
+ 
++    HRESULT PresentInternal(
++            UINT                      SyncInterval,
++            UINT                      PresentFlags,
++      const DXGI_PRESENT_PARAMETERS*  pPresentParameters);
++
+     HRESULT PresentImage(UINT SyncInterval);
+ 
+     void SubmitPresent(
+@@ -161,4 +168,4 @@ namespace dxvk {
+ 
+   };
+ 
+-}
+\ No newline at end of file
++}

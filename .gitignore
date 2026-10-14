@@ -1,0 +1,12 @@
+.build/
+.swiftpm/
+dist/
+.DS_Store
+*.xcuserstate
+__pycache__/
+Sources/TraverseCore/Resources/*.exe
+Sources/TraverseCore/Resources/application-dock-identity.dylib
+Sources/TraverseCore/Resources/ffxiv-dxgi.dll
+Tests/
+native/tests/
+docs/

@@ -1,0 +1,109 @@
+diff --git a/dxmt.conf b/dxmt.conf
+index 41a8f0f..89d54a4 100644
+--- a/dxmt.conf
++++ b/dxmt.conf
+@@ -35,6 +35,18 @@
+ 
+ # d3d11.preferredMaxFrameRate = 60
+ 
++
++# Limit real presentation calls while the swapchain window is minimized or
++# hidden. Visible windows keep their frame rate when another window has focus.
++# The foreground frame limit and the application's sync interval remain upper bounds.
++# Background blocking Present calls sleep for any time left in the frame
++# period after queue waits. PRESENT_TEST and PRESENT_DO_NOT_WAIT do not gain
++# that sleep.
++#
++# Supported values: Any non-negative integer; 0 disables the background limit.
++
++# d3d11.backgroundMaxFrameRate = 0
++
+ # Adjust MetalFX Sptial Upscaling factor.
+ # It is multiplied by source output width & height to get the
+ # final output resolution. 
+diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
+index 5e9404d..555ba2f 100644
+--- a/src/d3d11/d3d11_swapchain.cpp
++++ b/src/d3d11/d3d11_swapchain.cpp
+@@ -167,6 +167,8 @@ public:
+ 
+     preferred_max_frame_rate =
+         Config::getInstance().getOption<int>("d3d11.preferredMaxFrameRate", 0);
++    background_max_frame_rate =
++        Config::getInstance().getOption<int>("d3d11.backgroundMaxFrameRate", 0);
+     wsi::WsiMode current_mode;
+     if (wsi::getCurrentDisplayMode(monitor_, &current_mode) &&
+         current_mode.refreshRate.denominator != 0 &&
+@@ -750,12 +752,40 @@ public:
+     if (should_exit_fs)
+       SetFullscreenState(FALSE, nullptr);
+ 
++    int background_frame_rate = 0;
++    if (background_max_frame_rate > 0 &&
++        (window_minimized || !::IsWindowVisible(hWnd))) {
++      background_frame_rate = preferred_max_frame_rate > 0
++                                  ? std::min(preferred_max_frame_rate,
++                                             background_max_frame_rate)
++                                  : background_max_frame_rate;
++    }
++    ULONGLONG background_present_started = 0;
++    if (background_frame_rate > 0 &&
++        !(PresentFlags & DXGI_PRESENT_DO_NOT_WAIT))
++      background_present_started = ::GetTickCount64();
++    // Drawable pacing alone can still allow excess submissions. Include the
++    // queue wait in the background period and sleep outside the device lock.
++    auto pace_background_present = [background_frame_rate, PresentFlags,
++                                   background_present_started] {
++      if (background_frame_rate > 0 &&
++          !(PresentFlags & DXGI_PRESENT_DO_NOT_WAIT)) {
++        UINT rate = static_cast<UINT>(background_frame_rate);
++        UINT minimum_ms = (1000u + rate - 1u) / rate;
++        ULONGLONG elapsed_ms = ::GetTickCount64() - background_present_started;
++        if (elapsed_ms < minimum_ms)
++          ::Sleep(static_cast<DWORD>(minimum_ms - elapsed_ms));
++      }
++    };
++
+     std::unique_lock<d3d11_device_mutex> lock(device_->mutex);
+ 
+     device_context_->PrepareFlush();
+     if (hr == DXGI_STATUS_OCCLUDED) {
+       // flush commands without presenting
+       device_context_->Commit();
++      lock.unlock();
++      pace_background_present();
+       return hr;
+     }
+ 
+@@ -764,6 +794,8 @@ public:
+                      (preferred_max_frame_rate ? preferred_max_frame_rate
+                                                : init_refresh_rate_),
+                  preferred_max_frame_rate ? 1.0 / preferred_max_frame_rate : 0);
++    if (background_frame_rate > 0)
++      vsync_duration = std::max(vsync_duration, 1.0 / background_frame_rate);
+ 
+     auto &cmd_queue = device_->GetDXMTDevice().queue();
+     auto chunk = cmd_queue.CurrentChunk();
+@@ -806,6 +838,7 @@ public:
+     lock.unlock(); // since PresentBoundary() will and should only stall current thread
+ 
+     cmd_queue.PresentBoundary();
++    pace_background_present();
+ 
+     return hr;
+   };
+@@ -1073,6 +1106,7 @@ private:
+   DXGI_COLOR_SPACE_TYPE colorspace_ = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+   double init_refresh_rate_ = DBL_MAX;
+   int preferred_max_frame_rate = 0;
++  int background_max_frame_rate = 0;
+   HUDState hud;
+   Rc<Presenter> presenter;
+   ModeSetGuard modeset_guard_;
+@@ -1129,4 +1163,4 @@ CreateSwapChain(
+   return S_OK;
+ };
+ 
+-} // namespace dxmt
+\ No newline at end of file
++} // namespace dxmt

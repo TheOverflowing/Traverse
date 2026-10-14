@@ -1,0 +1,18 @@
+diff --git a/src/util/util_fps_limiter.cpp b/src/util/util_fps_limiter.cpp
+index da98000..90f0eaa 100644
+--- a/src/util/util_fps_limiter.cpp
++++ b/src/util/util_fps_limiter.cpp
+@@ -133,9 +133,10 @@ namespace dxvk {
+ 
+       ULONG min, max, cur;
+ 
+-      // Wine's implementation of these functions is a stub as of 6.10, which is fine
+-      // since it uses select() in NtDelayExecution. This is only relevant for Windows.
+-      if (NtQueryTimerResolution && !NtQueryTimerResolution(&min, &max, &cur)) {
++      // Wine's timer resolution does not describe NtDelayExecution's precision.
++      // Keep zero granularity there so the limiter sleeps the full interval.
++      bool wineWait = NtDelayExecution && ::GetProcAddress(ntdll, "wine_get_version");
++      if (!wineWait && NtQueryTimerResolution && !NtQueryTimerResolution(&min, &max, &cur)) {
+         m_sleepGranularity = NtTimerDuration(cur);
+ 
+         if (NtSetTimerResolution && !NtSetTimerResolution(max, TRUE, &cur)) {

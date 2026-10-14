@@ -1,0 +1,25 @@
+diff --git a/src/airconv/nt/dxbc_converter_base.cpp b/src/airconv/nt/dxbc_converter_base.cpp
+--- a/src/airconv/nt/dxbc_converter_base.cpp
++++ b/src/airconv/nt/dxbc_converter_base.cpp
+@@ -1009,6 +1009,9 @@ Converter::operator()(const InstFloatBinaryOp &bin) {
+   }
+   case FloatBinaryOp::Div:
+     Result = ir.CreateFDiv(LHS, RHS);
++    // D3D DIV permits reciprocal multiplication even when refactoring is disabled.
++    if (auto *Div = llvm::dyn_cast<llvm::Instruction>(Result))
++      Div->setHasAllowReciprocal(true);
+     break;
+   case FloatBinaryOp::Min: {
+     Result = air.CreateFPBinOp(AIRBuilder::fmin, LHS, RHS);
+diff --git a/src/dxmt/dxmt_shader_cache.hpp b/src/dxmt/dxmt_shader_cache.hpp
+--- a/src/dxmt/dxmt_shader_cache.hpp
++++ b/src/dxmt/dxmt_shader_cache.hpp
+@@ -4,7 +4,7 @@
+ 
+ namespace dxmt {
+ 
+-constexpr int kDXMTShaderCacheVersion = 18;
++constexpr int kDXMTShaderCacheVersion = 19;
+ 
+ class ShaderCache {
+ public:

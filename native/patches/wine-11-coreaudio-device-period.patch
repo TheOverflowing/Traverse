@@ -1,0 +1,112 @@
+--- a/dlls/winecoreaudio.drv/coreaudio.c
++++ b/dlls/winecoreaudio.drv/coreaudio.c
+@@ -104,8 +104,6 @@
+     BYTE *local_buffer, *cap_buffer, *wrap_buffer, *resamp_buffer, *tmp_buffer;
+ };
+ 
+-static const REFERENCE_TIME def_period = 100000;
+-static const REFERENCE_TIME min_period = 50000;
+ 
+ static ULONG_PTR zero_bits = 0;
+ 
+@@ -721,8 +719,52 @@
+     return id;
+ }
+ 
++static HRESULT get_device_period_frame_range(AudioDeviceID device, EDataFlow flow,
++                                             unsigned int *minimum, unsigned int *maximum)
++{
++    AudioObjectPropertyAddress address = {kAudioDevicePropertyBufferFrameSizeRange,
++                                         get_scope(flow), kAudioObjectPropertyElementMain};
++    AudioValueRange range;
++    UInt32 size = sizeof(range);
++    OSStatus status = AudioObjectGetPropertyData(device, &address, 0, NULL, &size, &range);
++    if (status != noErr) return osstatus_to_hresult(status);
++    *minimum = range.mMinimum;
++    *maximum = range.mMaximum;
++    return S_OK;
++}
++
++static HRESULT get_device_period_frame_size(AudioDeviceID device, EDataFlow flow, unsigned int *frames)
++{
++    AudioObjectPropertyAddress address = {kAudioDevicePropertyBufferFrameSize,
++                                         get_scope(flow), kAudioObjectPropertyElementMain};
++    UInt32 size = sizeof(*frames);
++    OSStatus status = AudioObjectGetPropertyData(device, &address, 0, NULL, &size, frames);
++    return status == noErr ? S_OK : osstatus_to_hresult(status);
++}
++
++static HRESULT set_device_period_frame_size(AudioDeviceID device, EDataFlow flow, unsigned int frames)
++{
++    AudioObjectPropertyAddress address = {kAudioDevicePropertyBufferFrameSize,
++                                         get_scope(flow), kAudioObjectPropertyElementMain};
++    OSStatus status = AudioObjectSetPropertyData(device, &address, 0, NULL, sizeof(frames), &frames);
++    return status == noErr ? S_OK : osstatus_to_hresult(status);
++}
++
++static HRESULT get_device_sample_rate(AudioDeviceID device, EDataFlow flow, unsigned int *rate)
++{
++    AudioObjectPropertyAddress address = {kAudioDevicePropertyNominalSampleRate,
++                                         get_scope(flow), kAudioObjectPropertyElementMain};
++    Float64 sample_rate;
++    UInt32 size = sizeof(sample_rate);
++    OSStatus status = AudioObjectGetPropertyData(device, &address, 0, NULL, &size, &sample_rate);
++    if (status != noErr) return osstatus_to_hresult(status);
++    *rate = sample_rate;
++    return S_OK;
++}
++
+ static NTSTATUS unix_create_stream(void *args)
+ {
++    unsigned int minimum, maximum;
+     struct create_stream_params *params = args;
+     struct coreaudio_stream *stream;
+     AURenderCallbackStruct input;
+@@ -742,12 +784,17 @@
+         goto end;
+     }
+ 
+-    stream->period = params->period;
+     stream->period_frames = muldiv(params->period, stream->fmt->nSamplesPerSec, 10000000);
+     stream->dev_id = dev_id_from_device(params->device);
+     stream->flow = params->flow;
+     stream->flags = params->flags;
+     stream->share = params->share;
++    if (FAILED(params->result = get_device_period_frame_range(stream->dev_id, stream->flow,
++                                                            &minimum, &maximum))) goto end;
++    stream->period_frames = max(minimum, min(stream->period_frames, maximum));
++    stream->period = muldiv(stream->period_frames, 10000000, stream->fmt->nSamplesPerSec);
++    if (FAILED(params->result = set_device_period_frame_size(stream->dev_id, stream->flow,
++                                                           stream->period_frames))) goto end;
+ 
+     stream->bufsize_frames = muldiv(params->duration, stream->fmt->nSamplesPerSec, 10000000);
+     if(params->share == AUDCLNT_SHAREMODE_EXCLUSIVE)
+@@ -1142,14 +1189,23 @@
+ static NTSTATUS unix_get_device_period(void *args)
+ {
+     struct get_device_period_params *params = args;
+-
++    unsigned int rate, frames, minimum, maximum;
++    AudioDeviceID device = dev_id_from_device(params->device);
++
++    if (FAILED(params->result = get_device_sample_rate(device, params->flow, &rate))) return STATUS_SUCCESS;
+     if (params->def_period)
+-        *params->def_period = def_period;
++    {
++        if (FAILED(params->result = get_device_period_frame_size(device, params->flow, &frames)))
++            return STATUS_SUCCESS;
++        *params->def_period = muldiv(frames, 10000000, rate);
++    }
+     if (params->min_period)
+-        *params->min_period = min_period;
+-
++    {
++        if (FAILED(params->result = get_device_period_frame_range(device, params->flow, &minimum, &maximum)))
++            return STATUS_SUCCESS;
++        *params->min_period = muldiv(minimum, 10000000, rate);
++    }
+     params->result = S_OK;
+-
+     return STATUS_SUCCESS;
+ }
+ 

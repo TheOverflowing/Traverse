@@ -1,0 +1,9 @@
+LIBRARY dxgi
+EXPORTS
+    CreateDXGIFactory @1
+    CreateDXGIFactory1=tdxg.CreateDXGIFactory1 @2
+    CreateDXGIFactory2=tdxg.CreateDXGIFactory2 @3
+    DXGID3D10CreateDevice=tdxg.DXGID3D10CreateDevice @4
+    DXGID3D10RegisterLayers=tdxg.DXGID3D10RegisterLayers @5
+    DXGIGetDebugInterface1=tdxg.DXGIGetDebugInterface1 @6
+    DXGIDeclareAdapterRemovalSupport=tdxg.DXGIDeclareAdapterRemovalSupport @7
