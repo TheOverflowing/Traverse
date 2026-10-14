@@ -119,6 +119,3 @@ Traverse's own source is [MIT licensed](LICENSE). Wine and other third-party
 components retain their upstream licenses. See
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and the bundled source archives
 for component notices and corresponding source information.
-
-Steam, CrossOver, and Apple's proprietary D3DMetal component are not included
-in this repository.
