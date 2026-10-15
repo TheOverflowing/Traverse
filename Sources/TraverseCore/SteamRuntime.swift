@@ -31,6 +31,7 @@ public actor SteamRuntime {
     public nonisolated let paths: TraversePaths
     private var launchedProcess: Process?
     private var enginePreparation: Task<Void, Error>?
+    private var gamePreparation: Task<Void, Error>?
     private let textSupport: WindowsTextSupport
     private let displaySupport: WindowsDisplaySupport
 
@@ -127,6 +128,23 @@ public actor SteamRuntime {
         try await BadEndTheaterSupport.install(in: paths, engine: engine, progress: progress)
     }
 
+    func prepareGameCompatibility(engine: WineEngine,
+                                  progress: @escaping @Sendable (String) async -> Void) async throws {
+        if let gamePreparation { return try await gamePreparation.value }
+        let status = BadEndTheaterSupport.status(in: paths)
+        guard status.gameInstalled, !status.supportInstalled else { return }
+        let preparation = Task {
+            let executable = BadEndTheaterSupport.gameDirectory(in: paths).appendingPathComponent("badendtheater.exe")
+            let profiles = GraphicsProfiles(paths: paths)
+            // A manually selected backend takes precedence over the default game fix.
+            guard try await !profiles.hasAlternateGameBackend(executable: executable, prefix: paths.prefix) else { return }
+            try await BadEndTheaterSupport.install(in: paths, engine: engine, progress: progress)
+        }
+        gamePreparation = preparation
+        defer { gamePreparation = nil }
+        try await preparation.value
+    }
+
     public func setEngine(_ wine: URL?) throws {
         let engine = wine.map { WineEngine(wine: $0) }
         if let engine, !engine.installed {
@@ -214,6 +232,7 @@ public actor SteamRuntime {
         }
         try await MSyncEngine.prepareGraphics(for: engine, progress: progress)
         try await prepareWindowsSupport(prefix: paths.prefix, engine: engine, progress: progress)
+        try await prepareGameCompatibility(engine: engine, progress: progress)
         let running = try await isRunning(engine: engine)
         if running {
             await progress("Opening Steam…")

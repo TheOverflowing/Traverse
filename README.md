@@ -25,6 +25,12 @@ The managed DXMT and D3DMetal graphics backends require macOS 26 or later.
 D3DMetal requires a 64-bit Windows executable; Auto falls back for 32-bit apps.
 Application compatibility depends on the application and selected backend.
 
+## Download
+
+Download the latest Apple Silicon application from [GitHub Releases](https://github.com/TheOverflowing/Traverse/releases/latest).
+Extract the ZIP and move `Traverse.app` to Applications. The app is ad-hoc signed
+and has not been notarized by Apple; macOS may require explicit approval to open it.
+
 ## Build and run
 
 Install the build tools and Rosetta if needed:
@@ -60,9 +66,20 @@ Windows shortcut. Imported files remain in their original locations. Removing a
 library entry hides or removes its launcher; it does not uninstall the application.
 
 Right-click an application to change its icon or graphics settings. Available
-backends are Auto, D3DMetal, DXMT, DXVK, and Wine. Application Auto follows the
+backends are Auto, D3DMetal, DXMT, DXVK, Wine, and GDI (Legacy 2D). Application Auto follows the
 default in **Settings → Graphics**. Restart applications after changing graphics,
 frame limits, fonts, display scaling, or engine settings.
+
+**Settings → Background** lets you use the desktop wallpaper or a custom image,
+with optional frosted glass and adjustable blur. Right-click the background for
+quick access. Choose **Show in Finder** from an application's context menu to
+locate its file.
+
+For older DirectDraw 2D applications that render a black screen, select
+**GDI (Legacy 2D)** in Application Settings. **Direct Keyboard Input** bypasses
+text composition for applications that need raw key events. **.NET Startup
+Compatibility** is an opt-in workaround for affected .NET applications; it disables
+the .NET runtime's write/execute separation for that application's launch.
 
 **Settings → Fusion Mode** adds a menu bar icon and macOS launchers under
 `~/Applications/Traverse` for Finder and Spotlight. It also offers Windows file
@@ -112,6 +129,10 @@ run each script without arguments to see its required inputs. The ordinary app
 build uses the bundled graphics and audio overlays and does not require rebuilding
 Wine, DXMT, or DXVK. The resource archives retain component source information,
 build records, and license notices.
+
+The optional `scripts/build-steam-audio-pathing.py` tool builds an x64 Steam Audio
+path-effect proxy from an application-supplied `phonon.dll`. It is installed
+manually and is not enabled by the application build; see the script's usage notes.
 
 ## License
 

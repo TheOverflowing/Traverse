@@ -47,6 +47,9 @@ public struct WineEngine: Sendable {
         }
         environment["WINEPREFIX"] = prefix.path
         environment["WINEARCH"] = "win64"
+        // macOS exposes OpenGL 3.2+ Core only as forward-compatible contexts.
+        // The managed engine can supply the flag when a Core application omits it.
+        environment["CX_FWD_COMPAT_GL_CTX"] = "1"
         environment["WINESERVER"] = server.path
         environment["WINEDEBUG"] = debug ? "+timestamp,+pid,+tid,+seh" : "-all"
         // Wine derives the legacy Windows code page from LC_CTYPE. GBK text

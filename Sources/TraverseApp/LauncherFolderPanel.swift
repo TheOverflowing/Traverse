@@ -18,6 +18,7 @@ struct LauncherFolderPanel: View {
     let launch: @MainActor (LauncherApplication) -> Void
     let configureGraphics: @MainActor (LauncherApplication) -> Void
     let configureIcon: @MainActor (LauncherApplication) -> Void
+    let reveal: @MainActor (LauncherApplication) -> Void
     let rename: @MainActor (String) -> Void
     let moveOut: @MainActor (String) -> Void
     let receive: @MainActor @Sendable (String, Int) -> Void
@@ -62,6 +63,7 @@ struct LauncherFolderPanel: View {
                                             Button("Application Settings…") { commitName(); configureGraphics(application) }.disabled(busy)
                                         }
                                         Button("Move Out of Folder") { commitName(); moveOut(application.id) }.disabled(busy)
+                                        Button("Show in Finder") { commitName(); reveal(application) }
                                     }
                             }
                         }

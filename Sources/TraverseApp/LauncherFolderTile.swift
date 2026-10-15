@@ -31,15 +31,16 @@ struct LauncherFolderTile: View {
     var body: some View {
         VStack(spacing: 12) {
             draggableIcon.frame(height: 92)
+                .background { LauncherTileHighlight(hovered: hovered, iconSize: iconSize) }
             Text(folder.name).font(.system(size: 13, weight: .medium))
                 .lineLimit(2).multilineTextAlignment(.center)
                 .shadow(color: .black.opacity(0.35), radius: 3, y: 1)
                 .frame(height: 36, alignment: .top).contentShape(Rectangle()).onTapGesture(perform: action)
         }
         .frame(maxWidth: .infinity).frame(height: 144)
-        .background(.white.opacity(hovered ? 0.065 : 0), in: RoundedRectangle(cornerRadius: 20))
         .contentShape(RoundedRectangle(cornerRadius: 20))
         .focusable()
+        .focusEffectDisabled()
         .onKeyPress(.return) { action(); return .handled }
         .onKeyPress(.space) { action(); return .handled }
         .onHover { hovered = $0 }
@@ -98,5 +99,23 @@ struct LauncherFolderTile: View {
                     .font(.system(size: size * 0.52)).foregroundStyle(.white.opacity(0.85)))
                 .frame(width: size, height: size)
         }
+    }
+}
+
+struct LauncherTileHighlight: View {
+    let hovered: Bool
+    let iconSize: CGFloat
+    @Environment(\.isFocused) private var focused
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: iconSize * 0.22 + 4, style: .continuous)
+            .fill(.white.opacity(focused ? 0.09 : hovered ? 0.065 : 0))
+            .overlay {
+                RoundedRectangle(cornerRadius: iconSize * 0.22 + 4, style: .continuous)
+                    .strokeBorder(.white.opacity(focused ? (contrast == .increased ? 0.65 : 0.3) : 0), lineWidth: 1.5)
+            }
+            .frame(width: iconSize + 8, height: iconSize + 8)
+            .allowsHitTesting(false)
     }
 }

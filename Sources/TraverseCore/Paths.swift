@@ -56,11 +56,16 @@ public struct TraverseSettings: Codable, Sendable {
     public var windowsTextFont: String?
     public var retinaMode = false
     public var fusionMode = false
+    public var customBackground = false
+    public var backgroundFrosted = true
+    public var backgroundBlur: Double = 38
+    public var backgroundImagePath: String?
     public var directKeyboardApplications: Set<String> = []
+    public var dotnetStartupApplications: Set<String> = []
 
     public init() {}
 
-    private enum CodingKeys: String, CodingKey { case customWine, rendering, msync, graphicsBackend, frameRateLimit, windowsTextFont, retinaMode, fusionMode, directKeyboardApplications }
+    private enum CodingKeys: String, CodingKey { case customWine, rendering, msync, graphicsBackend, frameRateLimit, windowsTextFont, retinaMode, fusionMode, directKeyboardApplications, dotnetStartupApplications, customBackground, backgroundFrosted, backgroundBlur, backgroundImagePath }
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -73,7 +78,12 @@ public struct TraverseSettings: Codable, Sendable {
         windowsTextFont = try values.decodeIfPresent(String.self, forKey: .windowsTextFont)
         retinaMode = try values.decodeIfPresent(Bool.self, forKey: .retinaMode) ?? false
         fusionMode = try values.decodeIfPresent(Bool.self, forKey: .fusionMode) ?? false
+        customBackground = try values.decodeIfPresent(Bool.self, forKey: .customBackground) ?? false
+        backgroundFrosted = try values.decodeIfPresent(Bool.self, forKey: .backgroundFrosted) ?? true
+        backgroundBlur = try values.decodeIfPresent(Double.self, forKey: .backgroundBlur) ?? 38
+        backgroundImagePath = try values.decodeIfPresent(String.self, forKey: .backgroundImagePath)
         directKeyboardApplications = try values.decodeIfPresent(Set<String>.self, forKey: .directKeyboardApplications) ?? []
+        dotnetStartupApplications = try values.decodeIfPresent(Set<String>.self, forKey: .dotnetStartupApplications) ?? []
     }
 
     public static func load(from paths: TraversePaths) throws -> Self {

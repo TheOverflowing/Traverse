@@ -44,6 +44,20 @@ public actor WindowsApplicationRuntime {
         try settings.save(to: paths)
     }
 
+    public func dotnetStartupCompatibility(for application: LauncherApplication) throws -> Bool {
+        try TraverseSettings.load(from: paths).dotnetStartupApplications.contains(application.id)
+    }
+
+    public func setDotnetStartupCompatibility(_ enabled: Bool, for application: LauncherApplication) throws {
+        guard application.kind == .executable || application.kind == .shortcut else {
+            throw TraverseError.message("Configure .NET startup compatibility on an imported application.")
+        }
+        var settings = try TraverseSettings.load(from: paths)
+        if enabled { settings.dotnetStartupApplications.insert(application.id) }
+        else { settings.dotnetStartupApplications.remove(application.id) }
+        try settings.save(to: paths)
+    }
+
     public func setGraphicsBackend(_ backend: GraphicsBackend, for application: LauncherApplication,
                                    targetExecutable: URL? = nil,
                                    progress: @escaping @Sendable (String) async -> Void = { _ in }) async throws -> GraphicsProfile {
@@ -83,6 +97,12 @@ public actor WindowsApplicationRuntime {
                 graphicsBackend: nil)
             try save(session)
             return session
+        }
+        if prefix.resolvingSymlinksInPath() == paths.prefix.resolvingSymlinksInPath(),
+           (application.steamAppID == BadEndTheaterSupport.appID
+            || URL(fileURLWithPath: executablePath).resolvingSymlinksInPath()
+                == BadEndTheaterSupport.gameDirectory(in: paths).appendingPathComponent("badendtheater.exe").resolvingSymlinksInPath()) {
+            try await steam.prepareGameCompatibility(engine: engine, progress: progress)
         }
         let graphicsProfile = try await graphics.launchProfile(for: application, engine: engine)
         let javaExecutable = URL(fileURLWithPath: executablePath).pathExtension.lowercased() == "jar"
@@ -128,6 +148,11 @@ public actor WindowsApplicationRuntime {
         // Keep the override within this application family; Steam uses target AppDefaults.
         if let graphicsProfile, application.kind == .executable || application.kind == .shortcut {
             environment["WINEDLLOVERRIDES"] = graphicsProfile.backend.environmentOverrides
+        }
+        if try dotnetStartupCompatibility(for: application) {
+            // .NET 8 callback stubs can spin before SDL startup with Wine's aliased
+            // executable mappings. Opt in per application; retain W^X elsewhere.
+            environment["DOTNET_EnableWriteXorExecute"] = "0"
         }
         FrameRateLimit.apply(status.frameRateLimit, to: &environment)
         process.environment = environment

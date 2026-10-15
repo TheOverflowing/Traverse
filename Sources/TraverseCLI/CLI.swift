@@ -58,7 +58,7 @@ struct TraverseCLI {
                 }
                 guard arguments.count == 3 || arguments.count == 4,
                       let application = try library.applications().first(where: { $0.id == arguments[1] }) else {
-                    throw TraverseError.message("Use: traverse graphics <application-id> status|auto|d3dmetal|dxmt|dxvk|wine [/path/to/game.exe]")
+                    throw TraverseError.message("Use: traverse graphics <application-id> status|auto|d3dmetal|dxmt|dxvk|wine|gdi [/path/to/game.exe]")
                 }
                 let applications = WindowsApplicationRuntime(steam: runtime)
                 if arguments[2] == "status", arguments.count == 3 {
@@ -81,6 +81,18 @@ struct TraverseCLI {
                     throw TraverseError.message("Choose status, direct, or text.")
                 }
                 try printJSON(try await applications.directKeyboardInput(for: application))
+            case "dotnet-startup":
+                guard arguments.count == 3,
+                      let application = try library.applications().first(where: { $0.id == arguments[1] }) else {
+                    throw TraverseError.message("Use: traverse dotnet-startup <application-id> status|on|off")
+                }
+                let applications = WindowsApplicationRuntime(steam: runtime)
+                if arguments[2] == "on" || arguments[2] == "off" {
+                    try await applications.setDotnetStartupCompatibility(arguments[2] == "on", for: application)
+                } else if arguments[2] != "status" {
+                    throw TraverseError.message("Choose status, on, or off.")
+                }
+                try printJSON(try await applications.dotnetStartupCompatibility(for: application))
             case "apps":
                 guard arguments.count == 1 else { throw TraverseError.message("Use: traverse apps") }
                 try printJSON(library.applications())
@@ -205,14 +217,15 @@ struct TraverseCLI {
                 traverse remove <id>             Remove an application from the launchpad
                 traverse open <id> [--debug] [--wait] Launch an application and record the session
                 traverse keyboard <id> status|direct|text Configure input method handling
+                traverse dotnet-startup <id> status|on|off Configure .NET startup compatibility
                 traverse doctor                 Check the host and selected engine
                 traverse benchmark run <label>   Measure fixed Windows workloads in an isolated environment
                                              [--qos default|user-initiated]
                 traverse benchmark compare <baseline.json> <candidate.json>
                 traverse graphics-benchmark run auto|d3dmetal|dxmt|dxvk|wine <label>
                 traverse graphics-benchmark compare <baseline.json> <candidate.json>
-                traverse graphics <id> status|auto|d3dmetal|dxmt|dxvk|wine [/path/to/game.exe]
-                traverse graphics default status|auto|d3dmetal|dxmt|dxvk|wine
+                traverse graphics <id> status|auto|d3dmetal|dxmt|dxvk|wine|gdi [/path/to/game.exe]
+                traverse graphics default status|auto|d3dmetal|dxmt|dxvk|wine|gdi
                 traverse frame-limit status|off|60|120|<fps>  Cap D3DMetal, DXMT, and DXVK games; restart applications and Steam to apply
                 traverse install-engine         Install the default MSync engine with updated DXMT
                 traverse install-engine msync   Install and select the MSync engine

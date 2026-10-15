@@ -75,7 +75,7 @@ public enum GraphicsSupport {
     public static func payloads(backend: GraphicsBackend, executable: URL, engine: WineEngine,
                                 paths: TraversePaths,
                                 progress: @Sendable (String) async -> Void) async throws -> [String: Data] {
-        if backend == .wine { return [:] }
+        if backend == .wine || backend == .gdi { return [:] }
         if backend == .dxmt { try await MSyncEngine.prepareGraphics(for: engine, progress: progress) }
         try validate(backend: backend, engine: engine)
         let architecture = try architecture(of: executable)
@@ -84,7 +84,7 @@ public enum GraphicsSupport {
             return try await payloads(backend: resolve(.automatic, executable: executable, engine: engine,
                                                       globalBackend: TraverseSettings.load(from: paths).graphicsBackend),
                                       executable: executable, engine: engine, paths: paths, progress: progress)
-        case .wine: return [:]
+        case .wine, .gdi: return [:]
         case .dxvk:
             return try await DXVKSupport.payloads(architecture: architecture, paths: paths, progress: progress)
         case .dxmt:

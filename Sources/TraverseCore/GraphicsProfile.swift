@@ -7,11 +7,13 @@ public enum GraphicsBackend: String, Codable, CaseIterable, Sendable {
     case dxmt
     case dxvk
     case wine
+    case gdi
 
     public var title: String {
         switch self {
         case .automatic: "Auto"
         case .wine: "Wine"
+        case .gdi: "GDI (Legacy 2D)"
         case .dxvk: "DXVK"
         case .dxmt: "DXMT"
         case .d3dmetal: "D3DMetal"
@@ -20,7 +22,7 @@ public enum GraphicsBackend: String, Codable, CaseIterable, Sendable {
 
     var libraryNames: [String] {
         switch self {
-        case .automatic, .wine: []
+        case .automatic, .wine, .gdi: []
         case .dxvk: ["d3d11.dll", "d3d10core.dll"]
         case .dxmt: ["d3d11.dll", "d3d10core.dll", "dxgi.dll", "winemetal.dll"]
         case .d3dmetal: ["d3d10.dll", "d3d11.dll", "d3d12.dll", "dxgi.dll", "tdxg.dll"]
@@ -29,7 +31,7 @@ public enum GraphicsBackend: String, Codable, CaseIterable, Sendable {
 
     var environmentOverrides: String {
         switch self {
-        case .automatic, .wine: "d3d11,d3d10core,dxgi,winemetal=b"
+        case .automatic, .wine, .gdi: "d3d11,d3d10core,dxgi,winemetal=b"
         case .dxvk: "d3d11,d3d10core=n,b;dxgi,winemetal=b"
         case .dxmt: "d3d11,d3d10core,dxgi=n,b;winemetal=b"
         case .d3dmetal: "d3d10,d3d11,d3d12,dxgi=n,b;d3d10core,winemetal=b"
@@ -45,11 +47,14 @@ public struct GraphicsProfile: Codable, Sendable, Equatable {
     public let fileHashes: [String: String]
     public let graphicsOverlayID: String?
     public let requestedBackend: GraphicsBackend?
+    public let previousRenderer: String?
+    public let previousCompatibilityFlags: String?
     public var selection: GraphicsBackend { requestedBackend ?? backend }
 
     public init(applicationID: String, backend: GraphicsBackend, executablePath: String,
                 prefixPath: String, fileHashes: [String: String], graphicsOverlayID: String? = nil,
-                requestedBackend: GraphicsBackend? = nil) {
+                requestedBackend: GraphicsBackend? = nil, previousRenderer: String? = nil,
+                previousCompatibilityFlags: String? = nil) {
         self.applicationID = applicationID
         self.backend = backend
         self.executablePath = executablePath
@@ -57,6 +62,8 @@ public struct GraphicsProfile: Codable, Sendable, Equatable {
         self.fileHashes = fileHashes
         self.graphicsOverlayID = graphicsOverlayID
         self.requestedBackend = requestedBackend
+        self.previousRenderer = previousRenderer
+        self.previousCompatibilityFlags = previousCompatibilityFlags
     }
 }
 
@@ -68,6 +75,14 @@ public actor GraphicsProfiles {
 
     public func profile(for application: LauncherApplication) throws -> GraphicsProfile? {
         try load()[application.id] ?? legacyProfile(for: application)
+    }
+
+    func hasAlternateGameBackend(executable: URL, prefix: URL) throws -> Bool {
+        let executablePath = canonical(executable).path
+        let prefixPath = canonical(prefix).path
+        return try load().values.contains {
+            $0.executablePath == executablePath && $0.prefixPath == prefixPath && $0.backend != .dxvk
+        }
     }
 
     func compatibilityDXVKProfileUpdate(executable: URL, prefix: URL,
@@ -146,7 +161,7 @@ public actor GraphicsProfiles {
         }
         var overrides: [String: String]
         switch backend {
-        case .automatic, .wine: overrides = ["d3d11": "builtin", "d3d10core": "builtin", "dxgi": "builtin", "winemetal": "builtin"]
+        case .automatic, .wine, .gdi: overrides = ["d3d11": "builtin", "d3d10core": "builtin", "dxgi": "builtin", "winemetal": "builtin"]
         case .dxvk: overrides = ["d3d11": "native,builtin", "d3d10core": "native,builtin", "dxgi": "builtin", "winemetal": "builtin"]
         case .dxmt: overrides = ["d3d11": "native,builtin", "d3d10core": "native,builtin", "dxgi": "native,builtin", "winemetal": "builtin"]
         case .d3dmetal: overrides = ["d3d10": "native,builtin", "d3d11": "native,builtin", "d3d12": "native,builtin", "dxgi": "native,builtin", "d3d10core": "builtin", "winemetal": "builtin"]
@@ -157,6 +172,21 @@ public actor GraphicsProfiles {
         for name in overrides.keys.sorted() {
             originalOverrides[name] = try await registryValue(name, key: key, engine: engine, prefix: prefix)
         }
+        let rendererKey = "HKCU\\Software\\Wine\\AppDefaults\\\(executable.lastPathComponent)\\Direct3D"
+        let managesRenderer = backend == .gdi || adopted?.backend == .gdi
+        let originalRenderer = managesRenderer
+            ? try await registryValue("renderer", key: rendererKey, engine: engine, prefix: prefix) : nil
+        let ownsRenderer = adopted?.backend == .gdi && originalRenderer == "gdi"
+        let previousRenderer = ownsRenderer ? adopted?.previousRenderer : originalRenderer
+        let changesRenderer = backend == .gdi || ownsRenderer
+        let compatibilityKey = "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers"
+        let compatibilityName = executable.lastPathComponent.lowercased()
+        let originalFlags = managesRenderer
+            ? try await registryValue(compatibilityName, key: compatibilityKey, engine: engine, prefix: prefix) : nil
+        let ownsFlags = adopted?.backend == .gdi
+            && originalFlags == Self.legacy2DCompatibilityFlags(adopted?.previousCompatibilityFlags)
+        let previousFlags = ownsFlags ? adopted?.previousCompatibilityFlags : originalFlags
+        let changesFlags = backend == .gdi || ownsFlags
         let compatibilityURL = BadEndTheaterSupport.recordURL(in: paths)
         var compatibilityRecord: GameSupportRecord?
         var originalCompatibilityRecord: Data?
@@ -181,12 +211,22 @@ public actor GraphicsProfiles {
             for (name, value) in overrides.sorted(by: { $0.key < $1.key }) {
                 try await setRegistryValue(value, name: name, key: key, engine: engine, prefix: prefix)
             }
+            if changesRenderer {
+                try await setRegistryValue(backend == .gdi ? "gdi" : previousRenderer,
+                    name: "renderer", key: rendererKey, engine: engine, prefix: prefix)
+            }
+            if changesFlags {
+                try await setRegistryValue(backend == .gdi ? Self.legacy2DCompatibilityFlags(previousFlags) : previousFlags,
+                    name: compatibilityName, key: compatibilityKey, engine: engine, prefix: prefix)
+            }
             let profile = GraphicsProfile(applicationID: application.id, backend: backend,
                 executablePath: executable.path, prefixPath: prefix.path, fileHashes: payloads.mapValues(Self.digest),
                 graphicsOverlayID: backend == .dxmt ? MSyncGraphicsOverlay.id
                     : backend == .d3dmetal ? D3DMetalSupport.overlayID
                     : backend == .dxvk ? DXVKSupport.id : nil,
-                requestedBackend: selection == .automatic ? .automatic : nil)
+                requestedBackend: selection == .automatic ? .automatic : nil,
+                previousRenderer: backend == .gdi ? previousRenderer : nil,
+                previousCompatibilityFlags: backend == .gdi ? previousFlags : nil)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             if let compatibilityRecord {
@@ -210,6 +250,14 @@ public actor GraphicsProfiles {
                 }
                 for name in overrides.keys.sorted() {
                     try await setRegistryValue(originalOverrides[name], name: name, key: key, engine: engine, prefix: prefix)
+                }
+                if changesFlags {
+                    try await setRegistryValue(originalFlags, name: compatibilityName, key: compatibilityKey,
+                        engine: engine, prefix: prefix)
+                }
+                if changesRenderer {
+                    try await setRegistryValue(originalRenderer, name: "renderer", key: rendererKey,
+                        engine: engine, prefix: prefix)
                 }
             } catch {
                 throw TraverseError.message("The graphics changes could not be fully restored. Reapply \(application.name)'s previous backend in Application Settings.")
@@ -323,6 +371,14 @@ public actor GraphicsProfiles {
                 && Set(profile.fileHashes.keys) == Set(profile.backend.libraryNames)
         }) else { throw TraverseError.message("The saved graphics profiles are invalid. Check graphics-profiles.json in the Traverse folder.") }
         return profiles
+    }
+
+    // Fixed-resolution DirectDraw surfaces must bypass Windows DPI virtualization.
+    static func legacy2DCompatibilityFlags(_ previous: String?) -> String {
+        var flags = (previous ?? "").split(separator: " ").map(String.init)
+            .filter { $0 != "DPIUNAWARE" && $0 != "HIGHDPIAWARE" }
+        flags.append("HIGHDPIAWARE")
+        return flags.joined(separator: " ")
     }
 
     private func registryValue(_ name: String, key: String, engine: WineEngine, prefix: URL) async throws -> String? {

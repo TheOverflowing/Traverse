@@ -25,15 +25,17 @@ final class AppModel: ObservableObject {
             if let error, error != oldValue, fusionMode { onBackgroundError?(error) }
         }
     }
-    @Published var rendering = SteamRendering.software
     @Published var msync = false
     @Published var graphicsBackend = GraphicsBackend.automatic
     @Published var frameRateLimit: Int?
     @Published var windowsTextFont = ""
     @Published var retinaMode = false
-    @Published var gameSupport: GameSupportStatus?
     @Published var showingAdd = false
     @Published var showingSettings = false
+    @Published var customBackground = false
+    @Published var backgroundFrosted = true
+    @Published var backgroundBlur: Double = 38
+    @Published var backgroundImage: NSImage?
     @Published var showingInstall = false
     @Published var graphicsApplication: LauncherApplication?
     @Published var iconApplication: LauncherApplication?
@@ -66,6 +68,13 @@ final class AppModel: ObservableObject {
         library = ApplicationLibrary(paths: steam.paths)
         do { fusionMode = try TraverseSettings.load(from: steam.paths).fusionMode }
         catch { self.error = error.localizedDescription }
+        do {
+            let settings = try TraverseSettings.load(from: steam.paths)
+            customBackground = settings.customBackground
+            backgroundFrosted = settings.backgroundFrosted
+            backgroundBlur = settings.backgroundBlur
+            backgroundImage = settings.backgroundImagePath.flatMap { NSImage(contentsOfFile: $0) }
+        } catch { self.error = error.localizedDescription }
         do { layout = try LauncherLayout.load(from: steam.paths) }
         catch { self.error = error.localizedDescription }
     }
@@ -74,13 +83,11 @@ final class AppModel: ObservableObject {
         defer { libraryLoaded = true }
         do {
             status = try await runtime.status()
-            rendering = status?.rendering ?? .software
             msync = status?.msync ?? false
             graphicsBackend = status?.graphicsBackend ?? .automatic
             frameRateLimit = status?.frameRateLimit
             windowsTextFont = status?.windowsTextFont ?? ""
             retinaMode = status?.retinaMode ?? false
-            gameSupport = await runtime.gameSupportStatus()
             let library = library
             applications = try await Task.detached(priority: .userInitiated) { try library.applications() }.value
             try synchronizeLayout()
@@ -309,18 +316,6 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func enableGameSupport() {
-        perform {
-            try await self.runtime.installGameSupport { message in
-                await MainActor.run { self.activity = message }
-            }
-        }
-    }
-
-    func saveRendering() {
-        perform { try await self.runtime.setRendering(self.rendering) }
-    }
-
     func chooseEngine() {
         let panel = NSOpenPanel()
         panel.title = "Choose Wine"
@@ -366,7 +361,9 @@ final class AppModel: ObservableObject {
     }
 
     func reveal(_ application: LauncherApplication) {
-        if let path = application.executablePath {
+        if application.kind == .steamGame, let directory = application.activationDirectory {
+            NSWorkspace.shared.open(URL(fileURLWithPath: directory, isDirectory: true))
+        } else if let path = application.executablePath {
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
         }
     }
@@ -721,7 +718,11 @@ private struct LaunchpadView: View {
                 moveFocus(direction)
             }
         }
-        .background { LauncherBackdrop() }
+        .background { LauncherBackdrop(image: model.customBackground ? model.backgroundImage : nil,
+                                       frosted: !model.customBackground || model.backgroundFrosted,
+                                       blur: model.customBackground ? model.backgroundBlur : 38) }
+        .contentShape(Rectangle())
+        .contextMenu { LauncherBackgroundMenu(model: model) }
         .preferredColorScheme(.dark)
         .sheet(isPresented: $model.showingAdd) { AddApplicationView(model: model) }
         .sheet(isPresented: $model.showingSettings) { LauncherSettingsView(model: model) }
@@ -741,7 +742,6 @@ private struct LaunchpadView: View {
                                 if let source = model.draggingItemID, folder.applicationIDs.contains(source) { closeFolder() }
                             }, receive: { source in
                                 model.moveOutOfFolder(source)
-                                model.draggingItemID = nil
                                 closeFolder()
                             }) { _ in
                                 Color.black.opacity(0.04).contentShape(Rectangle()).onTapGesture { closeFolder() }
@@ -756,6 +756,7 @@ private struct LaunchpadView: View {
                             launch: { model.launch($0); closeFolder() },
                             configureGraphics: { model.graphicsApplication = $0 },
                             configureIcon: { model.iconApplication = $0; closeFolder() },
+                            reveal: { model.reveal($0) },
                             rename: { model.renameFolder(id, name: $0) },
                             moveOut: { model.moveOutOfFolder($0) },
                             receive: { source, index in
@@ -905,7 +906,6 @@ private struct LaunchpadView: View {
             model.moveItem(id, to: slot)
             closeFolder()
         }
-        model.draggingItemID = nil
     }
 
     private func showFolder(_ id: String, editing: Bool = false) {
@@ -1156,11 +1156,6 @@ private struct LaunchpadView: View {
             || (application.kind == .executable && URL(fileURLWithPath: application.executablePath ?? "").pathExtension.lowercased() != "jar") {
             Button("Application Settings…") { model.graphicsApplication = application }.disabled(model.busy)
         }
-        if application.steamAppID == BadEndTheaterSupport.appID {
-            Button(model.gameSupport?.supportInstalled == true ? "Reapply Compatibility" : "Enable Compatibility") {
-                model.enableGameSupport()
-            }.disabled(model.busy)
-        }
         Divider()
         if let folder = model.layout.folderID(containing: application.id) {
             Button("Open Folder") { query = ""; showFolder(folder) }
@@ -1260,6 +1255,7 @@ struct ApplicationTile: View {
     var body: some View {
         VStack(spacing: 12) {
             draggableIcon.frame(height: 92)
+                .background { LauncherTileHighlight(hovered: hovered, iconSize: iconSize) }
             VStack(spacing: 3) {
                 Text(application.name).font(.system(size: 13, weight: .medium))
                     .lineLimit(2).multilineTextAlignment(.center)
@@ -1270,9 +1266,9 @@ struct ApplicationTile: View {
             }.frame(height: 36, alignment: .top).contentShape(Rectangle()).onTapGesture(perform: action)
         }
         .frame(maxWidth: .infinity).frame(height: 144)
-        .background(.white.opacity(hovered ? 0.065 : 0), in: RoundedRectangle(cornerRadius: 20))
         .contentShape(RoundedRectangle(cornerRadius: 20))
         .focusable()
+        .focusEffectDisabled()
         .onKeyPress(.return) { action(); return .handled }
         .onKeyPress(.space) { action(); return .handled }
         .onHover { hovered = $0 }
@@ -1321,7 +1317,10 @@ private struct LauncherControlStyle: ButtonStyle {
     }
 }
 
-private struct LauncherBackdrop: View {
+struct LauncherBackdrop: View {
+    var image: NSImage? = nil
+    var frosted = true
+    var blur: Double = 38
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     private static let wallpaper: NSImage? = {
         guard let screen = NSScreen.main, let url = NSWorkspace.shared.desktopImageURL(for: screen) else { return nil }
@@ -1335,11 +1334,13 @@ private struct LauncherBackdrop: View {
                                         Color(red: 0.24, green: 0.34, blue: 0.34),
                                         Color(red: 0.17, green: 0.2, blue: 0.31)],
                                startPoint: .topLeading, endPoint: .bottomTrailing)
-                if !reduceTransparency, let image = Self.wallpaper {
+                if !reduceTransparency, let image = image ?? Self.wallpaper {
                     Image(nsImage: image).resizable().scaledToFill()
-                        .frame(width: geometry.size.width + 120, height: geometry.size.height + 120)
-                        .blur(radius: 38).offset(x: -60, y: -60)
-                    Color.black.opacity(0.48)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .clipped()
+                        .blur(radius: frosted ? blur : 0, opaque: true)
+                    Color.black.opacity(frosted ? 0.48 : 0.25)
+                    if frosted { Color.white.opacity(0.035) }
                 } else if !reduceTransparency {
                     Ellipse().fill(Color.teal.opacity(0.35)).frame(width: 760, height: 540)
                         .blur(radius: 100).offset(x: -170, y: -180)
@@ -1420,6 +1421,7 @@ private struct ApplicationGraphicsSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var backend = GraphicsBackend.automatic
     @State private var directKeyboardInput = false
+    @State private var dotnetStartupCompatibility = false
     @State private var executable: URL?
     @State private var loading = true
     @State private var error: String?
@@ -1445,6 +1447,11 @@ private struct ApplicationGraphicsSettingsView: View {
             Toggle("Direct Keyboard Input", isOn: $directKeyboardInput)
             Text("Bypass input methods when game keys do not respond. Text composition is disabled for this application.")
                 .font(.caption).foregroundStyle(.secondary)
+            if application.kind == .executable || application.kind == .shortcut {
+                Toggle(".NET Startup Compatibility", isOn: $dotnetStartupCompatibility)
+                Text("Try this when a .NET application freezes before opening a window.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             VStack(alignment: .leading, spacing: 8) {
                 Text("Executable").font(.headline)
                 Text(executable?.path ?? "Choose the application's Windows executable.")
@@ -1473,6 +1480,7 @@ private struct ApplicationGraphicsSettingsView: View {
             .task {
                 do {
                     directKeyboardInput = try await model.applicationsRuntime.directKeyboardInput(for: application)
+                    dotnetStartupCompatibility = try await model.applicationsRuntime.dotnetStartupCompatibility(for: application)
                     if let profile = try await model.applicationsRuntime.graphicsProfile(for: application) {
                         backend = profile.selection
                         executable = URL(fileURLWithPath: profile.executablePath)
@@ -1510,6 +1518,9 @@ private struct ApplicationGraphicsSettingsView: View {
                         await MainActor.run { model.activity = message }
                     })
                 try await model.applicationsRuntime.setDirectKeyboardInput(directKeyboardInput, for: application)
+                if application.kind == .executable || application.kind == .shortcut {
+                    try await model.applicationsRuntime.setDotnetStartupCompatibility(dotnetStartupCompatibility, for: application)
+                }
                 await model.refresh()
                 dismiss()
             } catch { self.error = error.localizedDescription }
@@ -1583,6 +1594,9 @@ private struct LauncherSettingsView: View {
                 Button("Done") { if let onDone { onDone() } else { dismiss() } }.keyboardShortcut(.cancelAction)
             }.padding(24)
             Form {
+                Section("Background") {
+                    LauncherBackgroundControls(model: model)
+                }
                 Section("Fusion Mode") {
                     Toggle("Fusion Mode", isOn: Binding(get: { model.fusionMode }, set: { model.setFusionMode($0) }))
                     Text("Run Traverse in the menu bar. Open Windows apps from Finder or Spotlight, and search for Traverse to open your library.")
@@ -1618,22 +1632,6 @@ private struct LauncherSettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                     FrameRateLimitPicker(model: model)
                 }
-                Section("Steam") {
-                    Picker("Interface rendering", selection: $model.rendering) {
-                        ForEach(SteamRendering.allCases, id: \.self) { Text($0.title).tag($0) }
-                    }.onChange(of: model.rendering) { _, _ in
-                        if model.rendering != model.status?.rendering { model.saveRendering() }
-                    }
-                    Text("Use software rendering for a blank Steam window. Restart Steam to apply.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    if model.status?.steamInstalled != true {
-                        Button("Install Steam…") {
-                            if let onDone { onDone() } else { dismiss() }
-                            model.showLauncher?()
-                            model.showingInstall = true
-                        }
-                    }
-                }
                 Section("Windows Display") {
                     Toggle("Retina high resolution", isOn: $model.retinaMode)
                         .onChange(of: model.retinaMode) { _, _ in
@@ -1658,12 +1656,6 @@ private struct LauncherSettingsView: View {
                         .font(.custom(model.windowsTextFont.isEmpty ? "STHeitiSC-Light" : model.windowsTextFont, size: 24))
                     Text("Uses Chinese fonts installed on this Mac. Restart Windows apps, including Steam, to apply.")
                         .font(.caption).foregroundStyle(.secondary)
-                }
-                if let game = model.gameSupport, game.gameInstalled {
-                    Section("Game Compatibility") {
-                        LabeledContent(game.title, value: game.supportInstalled ? "Enabled" : "Available")
-                        Button(game.supportInstalled ? "Reapply Compatibility" : "Enable Compatibility") { model.enableGameSupport() }
-                    }
                 }
                 Section("Library") {
                     Button("Refresh Applications") { Task { await model.refresh() } }

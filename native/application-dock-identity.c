@@ -81,6 +81,24 @@ static id menu(id title)
     return ((id (*)(id, SEL))objc_msgSend)(result, selector("autorelease"));
 }
 
+static void quit_application(id application, SEL command, id sender)
+{
+    (void)command;
+    id window = ((id (*)(id, SEL))objc_msgSend)(application, selector("keyWindow"));
+    Class wine_window = objc_getClass("WineWindow");
+    if (!window) window = ((id (*)(id, SEL))objc_msgSend)(application, selector("mainWindow"));
+    if (wine_window && window && ((BOOL (*)(id, SEL, Class))objc_msgSend)(window,
+            selector("isKindOfClass:"), wine_window)) {
+        // Wine's terminate: sends session-end messages, which games can refuse.
+        // The normal close request lets the app save, confirm, or cancel itself.
+        // WineWindow posts WINDOW_CLOSE_REQUESTED here even for undecorated
+        // fullscreen windows, where AppKit's performClose: is disabled.
+        ((BOOL (*)(id, SEL, id))objc_msgSend)(window, selector("windowShouldClose:"), sender);
+    } else {
+        ((void (*)(id, SEL, id))objc_msgSend)(application, selector("terminate:"), sender);
+    }
+}
+
 static void ensure_window_menu(id application, id main)
 {
     long count = ((long (*)(id, SEL))objc_msgSend)(main, selector("numberOfItems"));
@@ -123,7 +141,10 @@ static void set_main_menu(id application, SEL command, id main)
     long count = submenu ? ((long (*)(id, SEL))objc_msgSend)(submenu, selector("numberOfItems")) : 0;
     for (long index = 0; index < count; index++) {
         id entry = ((id (*)(id, SEL, long))objc_msgSend)(submenu, selector("itemAtIndex:"), index);
-        if (((SEL (*)(id, SEL))objc_msgSend)(entry, selector("action")) == selector("terminate:")) {
+        SEL action = ((SEL (*)(id, SEL))objc_msgSend)(entry, selector("action"));
+        if (action == selector("terminate:") || action == selector("traverseQuit:")) {
+            ((void (*)(id, SEL, SEL))objc_msgSend)(entry, selector("setAction:"), selector("traverseQuit:"));
+            ((void (*)(id, SEL, id))objc_msgSend)(entry, selector("setTarget:"), application);
             ensure_window_menu(application, main);
             original_set_main_menu(application, command, main);
             return;
@@ -131,7 +152,7 @@ static void set_main_menu(id application, SEL command, id main)
     }
 
     // CFProcessPath makes Wine start as a regular app, skipping its default
-    // menu setup. Use terminate: so Wine still handles normal quit requests.
+    // menu setup. Supply the per-application Quit command here.
     id bundle = ((id (*)(id, SEL))objc_msgSend)((id)objc_getClass("NSBundle"), selector("mainBundle"));
     id name = ((id (*)(id, SEL, id))objc_msgSend)(bundle, selector("objectForInfoDictionaryKey:"), string("CFBundleName"));
     if (!name) name = string("Application");
@@ -146,7 +167,7 @@ static void set_main_menu(id application, SEL command, id main)
     }
     id title = ((id (*)(id, SEL, id))objc_msgSend)(string("Quit "), selector("stringByAppendingString:"), name);
     id quit = ((id (*)(id, SEL, id, SEL, id))objc_msgSend)(submenu,
-        selector("addItemWithTitle:action:keyEquivalent:"), title, selector("terminate:"), string("q"));
+        selector("addItemWithTitle:action:keyEquivalent:"), title, selector("traverseQuit:"), string("q"));
     ((void (*)(id, SEL, id))objc_msgSend)(quit, selector("setTarget:"), application);
     ((void (*)(id, SEL, unsigned long))objc_msgSend)(quit, selector("setKeyEquivalentModifierMask:"), 1UL << 20);
     ((void (*)(id, SEL, id))objc_msgSend)(item, selector("setSubmenu:"), submenu);
@@ -288,6 +309,7 @@ __attribute__((constructor)) static void configure_application_identity(void)
     // the main bundle during initialization, before Wine creates its windows.
     if (!dlopen("/System/Library/Frameworks/AppKit.framework/AppKit", RTLD_LAZY | RTLD_GLOBAL)) return;
     Class application = objc_getClass("NSApplication");
+    class_addMethod(application, selector("traverseQuit:"), (IMP)quit_application, "v@:@");
     Method method = class_getInstanceMethod(application, selector("setApplicationIconImage:"));
     original_set_icon = (void *)method_getImplementation(method);
     method_setImplementation(method, (IMP)set_application_icon);

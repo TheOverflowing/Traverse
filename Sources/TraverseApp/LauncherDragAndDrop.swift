@@ -123,10 +123,15 @@ final class LauncherIconDrag: ObservableObject {
     }
 
     private func clear() {
-        itemID = nil
-        didFinish?()
-        // Reveal the destination in the same display cycle as removing the floating artwork.
-        floating?.window?.contentView?.layoutSubtreeIfNeeded()
+        // Keep layout animation suppressed until the floating icon has landed,
+        // then reveal the destination without inheriting a surrounding animation.
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            itemID = nil
+            floating?.window?.contentView?.layoutSubtreeIfNeeded()
+            didFinish?()
+        }
         floating?.removeFromSuperview()
         floating = nil
         landing = false
